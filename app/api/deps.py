@@ -1,75 +1,107 @@
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
+
 from app.core.config import settings
 from app.crud import crud_user
+
+
+# =====================[ CẤU HÌNH JWT ]=====================
 SECRET_KEY = settings.SECRET_KEY
 ALGORITHM = settings.ALGORITHM
 
-# Báo cho FastAPI biết đường dẫn để lấy Token là gì (phục vụ cho giao diện Swagger UI)
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+# Lấy token từ header: Authorization: Bearer <token>
+security = HTTPBearer()
 
-async def get_current_user(token: str = Depends(oauth2_scheme)):
+
+# =====================[ XÁC THỰC USER ]=====================
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> dict:
     """
-    Hàm này tự động chạy khi có người gọi API. Nó sẽ bóc cái Token ra xem hợp lệ không.
+    Xác thực người dùng bằng JWT.
+
+    Luồng xử lý:
+    - Lấy token từ header
+    - Giải mã JWT
+    - Lấy user_id từ payload
+    - Query database để lấy user
     """
-    credentials_exception = HTTPException(
+
+    exception_401 = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Không thể xác thực thông tin (Token không hợp lệ hoặc đã hết hạn)",
+        detail="Token không hợp lệ hoặc đã hết hạn",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    
-    try:
-        # 1. Giải mã Token
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub") # "sub" chứa ID của user lúc mình tạo token ở hàm login
-        
-        if user_id is None:
-            raise credentials_exception
-            
-    except JWTError:
-        raise credentials_exception
 
-    # 2. Tìm User trong Database MongoDB bằng ID
+    try:
+        # 1. Lấy token
+        token = credentials.credentials
+
+        # 2. Decode JWT
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+
+        if not user_id:
+            raise exception_401
+
+    except JWTError:
+        raise exception_401
+
+    # 3. Lấy user từ database
     user = await crud_user.get_user_by_id(user_id)
-    
-    if user is None:
+
+    if not user:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail="Người dùng không còn tồn tại trong hệ thống"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Không tìm thấy người dùng",
         )
-        
+    if "_id" in user:
+        user["id"] = str(user.pop("_id"))
+
     return user
 
-# ==========================================
-# (BONUS) PHÂN QUYỀN CHO ADMIN VÀ NHÂN VIÊN
-# ==========================================
-async def get_current_admin(current_user: dict = Depends(get_current_user)):
-    """Dùng để khóa các API chỉ dành riêng cho Admin"""
+
+# =====================[ QUYỀN ADMIN ]=====================
+async def get_current_admin(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    Chỉ cho phép Admin truy cập
+    """
     if current_user.get("role") != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Bạn không có quyền truy cập vào chức năng này!"
+            detail="Bạn không có quyền Admin",
         )
     return current_user
 
-async def get_current_staff(current_user: dict = Depends(get_current_user)):
-    """Dùng để khóa các API cho Nhân viên (Staff) và Admin"""
-    if current_user.get("role") not in ["admin", "staff"]:
+
+# =====================[ QUYỀN STAFF ]=====================
+async def get_current_staff(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    Cho phép Admin và Staff
+    """
+    if current_user.get("role") not in {"admin", "staff"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Chỉ Nhân viên hoặc Quản trị viên mới có quyền thao tác!"
+            detail="Chỉ Staff hoặc Admin mới được phép",
         )
     return current_user
 
-async def get_current_active_user(current_user: dict = Depends(get_current_user)):
+
+# =====================[ USER ACTIVE ]=====================
+async def get_current_active_user(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
     """
-    Hàm này kiểm tra xem tài khoản có đang hoạt động (Active) không.
-    Nếu user bị khóa (status != 'active'), sẽ không cho gọi API.
+    Kiểm tra tài khoản có bị khóa không
     """
     if current_user.get("status") == "disabled":
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="Tài khoản của bạn đã bị khóa!"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tài khoản đã bị khóa",
         )
     return current_user

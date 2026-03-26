@@ -53,23 +53,21 @@ async def register(user_in: UserCreate):
 @router.post("/login")
 async def login(user_credentials: UserLogin):
     try:
-        # 1. Tìm user
         user = await crud_user.get_user_by_email(user_credentials.email)
         if not user:
             raise HTTPException(status_code=401, detail="Email hoặc mật khẩu không chính xác!")
-        
-        # 2. Kiểm tra mật khẩu
+
         if not verify_password(user_credentials.password, user["password"]):
             raise HTTPException(status_code=401, detail="Email hoặc mật khẩu không chính xác!")
-        
-        # 3. Tạo Token
+
         token_data = {
-            "sub": str(user["_id"]), 
+            "sub": str(user["_id"]),
             "role": user.get("role", "customer")
         }
+
         access_token = create_access_token(data=token_data)
         refresh_token = create_refresh_token(data=token_data)
-        
+
         return {
             "message": "Đăng nhập thành công!",
             "access_token": access_token,
@@ -82,10 +80,13 @@ async def login(user_credentials: UserLogin):
                 "role": user.get("role")
             }
         }
+
+    except HTTPException:
+        raise
+
     except Exception as e:
         print(f"🔥 LỖI LOGIN: {str(e)}")
         raise HTTPException(status_code=500, detail="Lỗi hệ thống khi đăng nhập!")
-
 # ==========================================
 # 3. API LẤY THÔNG TIN CÁ NHÂN (PROFILE)
 # ==========================================
