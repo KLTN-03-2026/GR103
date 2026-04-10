@@ -1,0 +1,178 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "fullName": { "type": "string", "description": "User's full name" },
+        "email": { "type": "string", "description": "User's email address" },
+        "role": { "type": "string", "enum": ["Admin", "Staff", "Customer"], "description": "User role" },
+        "status": { "type": "string", "description": "User account status" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Account creation timestamp" },
+        "lastLogin": { "type": "string", "format": "date-time", "description": "Last login timestamp" },
+        "isVerified": { "type": "boolean", "description": "Whether the email is verified" },
+        "phoneNumber": { "type": "string", "description": "User's phone number" },
+        "location": { "type": "string", "description": "User's location" },
+        "travelTier": { "type": "string", "description": "User's travel tier" },
+        "voyagerMiles": { "type": "number", "description": "User's voyager miles" },
+        "cabinPreference": { "type": "string", "enum": ["Economy", "Premium Economy", "Business Class", "First Class"], "description": "User's cabin preference" },
+        "dietary": { "type": "string", "description": "User's dietary preferences" },
+        "bedType": { "type": "string", "description": "User's bed type preference" },
+        "aiConciergeMode": { "type": "boolean", "description": "Whether AI concierge mode is enabled" },
+        "avatarUrl": { "type": "string", "description": "User's avatar URL" }
+      },
+      "required": ["uid", "fullName", "email", "role"]
+    },
+    "VerificationCode": {
+      "title": "VerificationCode",
+      "description": "Temporary OTP for email verification",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "code": { "type": "string" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "code", "expiresAt"]
+    },
+    "Hotel": {
+      "title": "Hotel",
+      "description": "Hotel inventory item",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "location": { "type": "string" },
+        "rating": { "type": "number" },
+        "pricePerNight": { "type": "number" },
+        "status": { "type": "string", "enum": ["OPERATIONAL", "MAINTENANCE", "CLOSED"] },
+        "image": { "type": "string" }
+      },
+      "required": ["name", "location", "rating", "pricePerNight", "status"]
+    },
+    "Restaurant": {
+      "title": "Restaurant",
+      "description": "Restaurant asset",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "cuisine": { "type": "string" },
+        "location": { "type": "string" },
+        "rating": { "type": "number" },
+        "status": { "type": "string", "enum": ["Active", "Pending Audit", "Maintenance"] },
+        "image": { "type": "string" },
+        "description": { "type": "string" }
+      },
+      "required": ["name", "cuisine", "location", "status"]
+    },
+    "Attraction": {
+      "title": "Attraction",
+      "description": "Tourist attraction asset",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "location": { "type": "string" },
+        "rating": { "type": "number" },
+        "status": { "type": "string", "enum": ["Active", "Pending Audit", "Maintenance"] },
+        "image": { "type": "string" },
+        "description": { "type": "string" }
+      },
+      "required": ["name", "type", "location", "status"]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "Asset booking record",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "assetId": { "type": "string" },
+        "assetName": { "type": "string" },
+        "assetType": { "type": "string", "enum": ["hotel", "restaurant", "attraction"] },
+        "date": { "type": "string", "format": "date" },
+        "status": { "type": "string", "enum": ["Confirmed", "Pending", "Cancelled", "Completed"] },
+        "amount": { "type": "number" },
+        "hasReview": { "type": "boolean" }
+      },
+      "required": ["userId", "userName", "assetId", "assetName", "assetType", "date", "status"]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "User review for a booking",
+      "type": "object",
+      "properties": {
+        "bookingId": { "type": "string" },
+        "userId": { "type": "string" },
+        "rating": { "type": "number" },
+        "highlights": { "type": "array", "items": { "type": "string" } },
+        "comment": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["bookingId", "userId", "rating", "comment", "createdAt"]
+    },
+    "SystemSettings": {
+      "title": "SystemSettings",
+      "description": "Global system configuration",
+      "type": "object",
+      "properties": {
+        "profitMarkup": { "type": "number" },
+        "defaultCurrency": { "type": "string" },
+        "exchangeRates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "pair": { "type": "string" },
+              "rate": { "type": "number" },
+              "change": { "type": "string" },
+              "isOverride": { "type": "boolean" }
+            }
+          }
+        },
+        "stripeApiKey": { "type": "string" },
+        "stripeWebhookSecret": { "type": "string" },
+        "paypalClientId": { "type": "string" },
+        "paypalSecret": { "type": "string" },
+        "lastSecretRotation": { "type": "string", "format": "date-time" }
+      },
+      "required": ["profitMarkup", "defaultCurrency", "exchangeRates"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile documents"
+    },
+    "/verificationCodes/{email}": {
+      "schema": "VerificationCode",
+      "description": "Temporary verification codes"
+    },
+    "/hotels/{hotelId}": {
+      "schema": "Hotel",
+      "description": "Hotel inventory documents"
+    },
+    "/restaurants/{restaurantId}": {
+      "schema": "Restaurant",
+      "description": "Restaurant asset documents"
+    },
+    "/attractions/{attractionId}": {
+      "schema": "Attraction",
+      "description": "Attraction asset documents"
+    },
+    "/bookings/{bookingId}": {
+      "schema": "Booking",
+      "description": "Asset booking documents"
+    },
+    "/reviews/{reviewId}": {
+      "schema": "Review",
+      "description": "User review documents"
+    },
+    "/system/settings": {
+      "schema": "SystemSettings",
+      "description": "Global system settings document"
+    }
+  }
+}
