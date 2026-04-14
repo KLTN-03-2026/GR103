@@ -1,5 +1,6 @@
 import time
 from fastapi import APIRouter, Depends, HTTPException, status
+from httpx import request
 from app.api.deps import get_current_user
 from app.crud import crud_user
 from app.core.database import get_collection
@@ -11,7 +12,8 @@ from app.schemas.user_schema import (
     UserLogin, 
     ForgotPasswordRequest, 
     ResetPasswordRequest, 
-    UserUpdateProfile 
+    UserUpdateProfile, 
+    OTPRequest 
 )
 
 # Khởi tạo Router cho nhóm API Xác thực
@@ -21,7 +23,30 @@ router = APIRouter()
 OTP_STORE = {}
 
 # ==========================================
-# 1. API ĐĂNG KÝ (REGISTER)
+# 1. API YÊU CẦU GỬI MÃ OTP ĐĂNG KÝ
+# ==========================================
+@router.post("/request-otp")
+async def request_otp(request: OTPRequest):
+    # Kiểm tra xem email đã tồn tại chưa
+    existing_user = await crud_user.get_user_by_email(request.email)
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email này đã được đăng ký trong hệ thống!"
+        )
+        
+    otp_code = generate_otp()
+    # Lưu vào bộ nhớ tạm (sống 5 phút = 300s)
+    OTP_STORE[request.email] = {"otp": otp_code, "exp": time.time() + 300}
+    
+   # Gửi mail cho Đăng ký
+    if send_otp_email(request.email, otp_code, usage="register"):
+        return {"message": "Mã OTP đăng ký đã được gửi đến email của bạn!"}
+    
+    raise HTTPException(status_code=500, detail="Không thể gửi email OTP lúc này!")
+
+# ==========================================
+# 1.1 API ĐĂNG KÝ (CÓ XÁC THỰC OTP)
 # ==========================================
 @router.post("/register", response_model=UserProfileResponse)
 async def register(user_in: UserCreate):
@@ -33,7 +58,20 @@ async def register(user_in: UserCreate):
             detail="Email này đã được đăng ký trong hệ thống!"
         )
     
-    # 2. Băm mật khẩu và lưu
+    # 2. Kiểm tra OTP trong bộ nhớ tạm
+    saved_otp_info = OTP_STORE.get(user_in.email)
+    
+    if not saved_otp_info:
+        raise HTTPException(status_code=400, detail="Bạn chưa yêu cầu gửi mã OTP!")
+        
+    if time.time() > saved_otp_info["exp"]:
+        OTP_STORE.pop(user_in.email, None) # Xóa OTP hết hạn
+        raise HTTPException(status_code=400, detail="Mã OTP đã hết hạn! Vui lòng xin lại mã mới.")
+        
+    if saved_otp_info["otp"] != user_in.otp_code:
+        raise HTTPException(status_code=400, detail="Mã OTP không chính xác!")
+    
+    # 3. OTP đúng -> Băm mật khẩu và tạo tài khoản
     hashed_password = get_password_hash(user_in.password)
     user_data = {
         "full_name": user_in.full_name,
@@ -45,6 +83,10 @@ async def register(user_in: UserCreate):
     
     new_user = await crud_user.create_user(user_data)
     new_user["id"] = str(new_user["_id"])
+    
+    # 4. Tạo xong thì dọn dẹp cái OTP trong bộ nhớ đi
+    OTP_STORE.pop(user_in.email, None)
+    
     return new_user
 
 # ==========================================
@@ -107,8 +149,8 @@ async def forgot_password(request: ForgotPasswordRequest):
     otp_code = generate_otp()
     OTP_STORE[request.email] = {"otp": otp_code, "exp": time.time() + 300}
     
-    # Giả lập gửi mail (hoặc gọi email_service thật)
-    if send_otp_email(request.email, otp_code):
+    # Gửi mail cho Quên mật khẩu
+    if send_otp_email(request.email, otp_code, usage="reset"):
         return {"message": "Mã OTP đã được gửi đến email của bạn!"}
     
     raise HTTPException(status_code=500, detail="Không thể gửi email OTP lúc này!")
