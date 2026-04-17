@@ -1,54 +1,30 @@
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
-
 from app.core.config import settings
 from app.crud import crud_user
+from app.core.database import get_collection
+from bson import ObjectId
 
 
-# =====================[ CẤU HÌNH JWT ]=====================
-SECRET_KEY = settings.SECRET_KEY
-ALGORITHM = settings.ALGORITHM
-
-# Lấy token từ header: Authorization: Bearer <token>
-security = HTTPBearer()
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
 
 
-# =====================[ XÁC THỰC USER ]=====================
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-) -> dict:
-    """
-    Xác thực người dùng bằng JWT.
-
-    Luồng xử lý:
-    - Lấy token từ header
-    - Giải mã JWT
-    - Lấy user_id từ payload
-    - Query database để lấy user
-    """
-
-    exception_401 = HTTPException(
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Token không hợp lệ hoặc đã hết hạn",
+        detail="Không thể xác thực thông tin đăng nhập",
         headers={"WWW-Authenticate": "Bearer"},
     )
-
     try:
-        # 1. Lấy token
-        token = credentials.credentials
-
-        # 2. Decode JWT
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         user_id: str = payload.get("sub")
-
-        if not user_id:
-            raise exception_401
-
+        if user_id is None:
+            raise credentials_exception
     except JWTError:
-        raise exception_401
-
-    # 3. Lấy user từ database
+        raise credentials_exception
+    
+    # Tìm user trong Database 
     user = await crud_user.get_user_by_id(user_id)
 
     if not user:
@@ -62,46 +38,29 @@ async def get_current_user(
     return user
 
 
-# =====================[ QUYỀN ADMIN ]=====================
-async def get_current_admin(
-    current_user: dict = Depends(get_current_user),
-) -> dict:
-    """
-    Chỉ cho phép Admin truy cập
-    """
+async def get_current_active_user(current_user: dict = Depends(get_current_user)):
+ 
+    if current_user.get("status") == "locked":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tài khoản của bạn đã bị khóa!"
+        )
+    return current_user
+
+async def get_current_staff_user(current_user: dict = Depends(get_current_active_user)):
+    if current_user.get("role") not in ["admin", "staff"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bạn không có quyền thực hiện hành động này!"
+        )
+    return current_user
+
+
+async def get_current_admin_user(current_user: dict = Depends(get_current_active_user)):
     if current_user.get("role") != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Bạn không có quyền Admin",
+            detail="Bạn không có quyền thực hiện hành động này!"
         )
     return current_user
-
-
-# =====================[ QUYỀN STAFF ]=====================
-async def get_current_staff(
-    current_user: dict = Depends(get_current_user),
-) -> dict:
-    """
-    Cho phép Admin và Staff
-    """
-    if current_user.get("role") not in {"admin", "staff"}:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Chỉ Staff hoặc Admin mới được phép",
-        )
-    return current_user
-
-
-# =====================[ USER ACTIVE ]=====================
-async def get_current_active_user(
-    current_user: dict = Depends(get_current_user),
-) -> dict:
-    """
-    Kiểm tra tài khoản có bị khóa không
-    """
-    if current_user.get("status") == "disabled":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Tài khoản đã bị khóa",
-        )
-    return current_user
+    

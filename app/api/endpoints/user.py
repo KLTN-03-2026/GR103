@@ -1,34 +1,61 @@
 from fastapi import APIRouter, Depends, HTTPException
-from app.schemas.user_schema import UserProfileResponse, UserUpdateProfile
-from app.api.deps import get_current_user 
+from app.schemas.user_schema import UserProfileResponse, UserUpdateProfile, UserAdminUpdate
+from app.api.deps import get_current_active_user, get_current_admin_user
 from app.crud import crud_user
+
 
 router = APIRouter()
 
-# 1. API lấy hồ sơ cá nhân (GET)
+#  API get profile user
 @router.get("/me", response_model=UserProfileResponse)
-async def get_my_profile(current_user: dict = Depends(get_current_user)):
+async def get_my_profile(current_user: dict = Depends(get_current_active_user)):
+    current_user["id"] = str(current_user["_id"])
     return current_user
 
-# 2. API CẬP NHẬT HỒ SƠ (PATCH)
+# API update profile user
 @router.patch("/me", response_model=UserProfileResponse)
 async def update_my_profile(
     user_in: UserUpdateProfile,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_active_user)
 ):
-    # 1. Bóc tách dữ liệu
     update_data = user_in.model_dump(exclude_unset=True)
+    updated_user = await crud_user.update_user_profile(str(current_user["_id"]), update_data)
     
-    # 2. Chặn nếu JSON rỗng
-    if not update_data:
-        raise HTTPException(status_code=400, detail="Không có thông tin nào để cập nhật")
-        
-    # 3. Gọi hàm CRUD xử lý DB (SỬA "_id" THÀNH "id" Ở ĐÂY)
-    updated_user = await crud_user.update_user_profile(str(current_user["id"]), update_data)
-    
-    # 4. Bắt lỗi
     if not updated_user:
-        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng hoặc cập nhật thất bại")
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
         
-    # 5. Trả về kết quả
+    updated_user["id"] = str(updated_user["_id"])
+    return updated_user
+# A. API list all user(Admin)
+@router.get("/", response_model=list[UserProfileResponse])
+async def get_all_users(
+    admin_user: dict = Depends(get_current_admin_user),
+    skip: int = 0,
+    limit: int = 100
+):
+    # Get to list all user from database
+    users = await crud_user.get_multi_users(skip=skip, limit=limit)
+    
+    # Create a clean list of users w id
+    clean_users = []
+    for u in users:
+        u["id"] = str(u["_id"]) 
+        clean_users.append(u)
+        
+    return clean_users
+
+#  API Khóa/Mở khóa hoặc Đổi quyền (Admin)
+@router.patch("/{user_id}/admin-update", response_model=UserProfileResponse)
+async def admin_update_user(
+    user_id: str,
+    obj_in: UserAdminUpdate,
+    admin_user: dict = Depends(get_current_admin_user)
+):
+    update_data = obj_in.model_dump(exclude_unset=True)
+    updated_user = await crud_user.update_user_profile(user_id, update_data)
+    
+    if not updated_user:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
+        
+    updated_user["id"] = str(updated_user["_id"])
     return updated_user
