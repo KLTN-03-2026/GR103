@@ -1,5 +1,11 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import Optional, List
+from enum import Enum
+
+class InventoryType(str, Enum):
+    HOTEL = "hotel"
+    RESTAURANT = "restaurant"
+    ATTRACTION = "attraction"
 
 class HotelBase(BaseModel):
     name: str = Field(..., description="Tên khách sạn", examples=["Mường Thanh Luxury Đà Nẵng"])
@@ -14,14 +20,13 @@ class HotelCreate(HotelBase):
     pass
 
 class HotelUpdate(BaseModel):
-    # Tất cả các trường đều là Optional (Cho phép sửa 1 hoặc nhiều trường)
     name: Optional[str] = None
     address: Optional[str] = None
     description: Optional[str] = None
+    image_url: Optional[str] = None
     price_per_night: Optional[float] = None
-    images: Optional[List[str]] = None
     amenities: Optional[List[str]] = None
     is_active: Optional[bool] = None
 
 class HotelResponse(HotelBase):
-    id: str # FastAPI sẽ trả về id dạng chuỗi thay vì _id của MongoDB
+    id: str

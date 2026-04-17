@@ -23,3 +23,5 @@ async def close_mongo_connection():
 # Hàm helper để lấy collection (tương đương với lấy table bên SQL)
 def get_collection(collection_name: str):
     return db_instance.db[collection_name]
+def get_database():
+    return db_instance.db
