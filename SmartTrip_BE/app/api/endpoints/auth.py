@@ -2,164 +2,193 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.api.deps import get_current_user
 from app.crud import crud_user
-from app.core.database import get_collection
 from app.core.security import get_password_hash, verify_password, create_access_token, create_refresh_token
 from app.services.email_service import generate_otp, send_otp_email
 from app.schemas.user_schema import (
     UserCreate, 
     UserProfileResponse, 
     UserLogin, 
-    ForgotPasswordRequest, 
-    ResetPasswordRequest, 
-    UserUpdateProfile 
+    VerifyAccountRequest,
+    ResendOTPRequest,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
+    UserUpdateProfile
 )
 
-# Khởi tạo Router cho nhóm API Xác thực
 router = APIRouter()
 
-# Bộ nhớ tạm để lưu OTP (Trong thực tế nên dùng Redis)
+# Bộ nhớ tạm lưu OTP (Dùng tạm cho đồ án, thực tế sẽ dùng Redis)
 OTP_STORE = {}
 
 # ==========================================
-# 1. API ĐĂNG KÝ (REGISTER)
+# 1. API ĐĂNG KÝ (LƯU DB TRƯỚC - TRẠNG THÁI INACTIVE)
 # ==========================================
-@router.post("/register", response_model=UserProfileResponse)
+@router.post("/register", summary="Đăng ký tài khoản (Lưu DB trước, cần xác thực sau)")
 async def register(user_in: UserCreate):
-    # 1. Kiểm tra Email tồn tại
     existing_user = await crud_user.get_user_by_email(user_in.email)
     if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email này đã được đăng ký trong hệ thống!"
-        )
-    
-    # 2. Băm mật khẩu và lưu
+        if existing_user.get("status") == "inactive":
+            raise HTTPException(status_code=400, detail="Tài khoản này chưa được xác thực. Vui lòng bấm gửi lại mã OTP!")
+        raise HTTPException(status_code=400, detail="Email này đã được sử dụng!")
+
     hashed_password = get_password_hash(user_in.password)
     user_data = {
         "full_name": user_in.full_name,
         "email": user_in.email,
         "password": hashed_password,
         "role": "customer",
-        "status": "active"
+        "status": "inactive" # KHÓA TÀI KHOẢN
     }
     
     new_user = await crud_user.create_user(user_data)
-    new_user["id"] = str(new_user["_id"])
-    return new_user
 
-# ==========================================
-# 2. API ĐĂNG NHẬP (LOGIN)
-# ==========================================
-@router.post("/login")
-async def login(user_credentials: UserLogin):
-    try:
-        user = await crud_user.get_user_by_email(user_credentials.email)
-        if not user:
-            raise HTTPException(status_code=401, detail="Email hoặc mật khẩu không chính xác!")
-
-        if not verify_password(user_credentials.password, user["password"]):
-            raise HTTPException(status_code=401, detail="Email hoặc mật khẩu không chính xác!")
-
-        token_data = {
-            "sub": str(user["_id"]),
-            "role": user.get("role", "customer")
-        }
-
-        access_token = create_access_token(data=token_data)
-        refresh_token = create_refresh_token(data=token_data)
-
-        return {
-            "message": "Đăng nhập thành công!",
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "token_type": "bearer",
-            "user_info": {
-                "id": str(user["_id"]),
-                "full_name": user.get("full_name"),
-                "email": user.get("email"),
-                "role": user.get("role")
-            }
-        }
-
-    except HTTPException:
-        raise
-
-    except Exception as e:
-        print(f"🔥 LỖI LOGIN: {str(e)}")
-        raise HTTPException(status_code=500, detail="Lỗi hệ thống khi đăng nhập!")
-# ==========================================
-# 3. API LẤY THÔNG TIN CÁ NHÂN (PROFILE)
-# ==========================================
-@router.get("/me", response_model=UserProfileResponse)
-async def get_profile(current_user: dict = Depends(get_current_user)):
-    current_user["id"] = str(current_user["_id"])
-    return current_user
-
-# ==========================================
-# 4. API YÊU CẦU QUÊN MẬT KHẨU
-# ==========================================
-@router.post("/forgot-password")
-async def forgot_password(request: ForgotPasswordRequest):
-    user = await crud_user.get_user_by_email(request.email)
-    if not user:
-        raise HTTPException(status_code=404, detail="Email không tồn tại!")
-        
     otp_code = generate_otp()
-    OTP_STORE[request.email] = {"otp": otp_code, "exp": time.time() + 300}
-    
-    # Giả lập gửi mail (hoặc gọi email_service thật)
-    if send_otp_email(request.email, otp_code):
-        return {"message": "Mã OTP đã được gửi đến email của bạn!"}
-    
-    raise HTTPException(status_code=500, detail="Không thể gửi email OTP lúc này!")
+    OTP_STORE[user_in.email] = {"otp": otp_code, "exp": time.time() + 300}
+    send_otp_email(user_in.email, otp_code, usage="register")
+
+    return {
+        "message": "Đăng ký thành công! Vui lòng kiểm tra email để lấy mã xác thực.",
+        "user_id": str(new_user["_id"]) if "_id" in new_user else new_user.get("id"),
+        "email": user_in.email
+    }
 
 # ==========================================
-@router.post("/reset-password")
-async def reset_password(request: ResetPasswordRequest):
-    saved_otp_info = OTP_STORE.get(request.email)
+# 2. API XÁC THỰC TÀI KHOẢN (ACTIVE ACCOUNT)
+# ==========================================
+@router.post("/verify-account", summary="Xác minh OTP để kích hoạt tài khoản")
+async def verify_account(payload: VerifyAccountRequest):
+    user = await crud_user.get_user_by_email(payload.email)
+    if not user:
+        raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản!")
     
-    if not saved_otp_info or saved_otp_info["otp"] != request.otp:
-        raise HTTPException(status_code=400, detail="Mã OTP không chính xác!")
+    if user.get("status") == "active":
+        raise HTTPException(status_code=400, detail="Tài khoản này đã được kích hoạt từ trước!")
+
+    saved_otp_info = OTP_STORE.get(payload.email)
+    if not saved_otp_info:
+        raise HTTPException(status_code=400, detail="Mã OTP không tồn tại hoặc bạn chưa yêu cầu gửi!")
         
     if time.time() > saved_otp_info["exp"]:
-        OTP_STORE.pop(request.email, None)
+        OTP_STORE.pop(payload.email, None)
         raise HTTPException(status_code=400, detail="Mã OTP đã hết hạn!")
         
-    try:
-        users_collection = get_collection("users")
-        # Chỗ này thường là nơi gây lỗi 500 nếu thư viện bcrypt bị lỗi
-        hashed_new_password = get_password_hash(request.new_password)
-        
-        await users_collection.update_one(
-            {"email": request.email},
-            {"$set": {"password": hashed_new_password}}
-        )
-        
-        OTP_STORE.pop(request.email, None)
-        return {"message": "Đặt lại mật khẩu thành công. Hãy đăng nhập lại!"}
-    except Exception as e:
-        # THÊM DÒNG NÀY ĐỂ HIỆN LỖI CHI TIẾT RA TERMINAL
-        import traceback
-        traceback.print_exc() 
-        print(f"🔥 LỖI RESET CHI TIẾT: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Lỗi thực sự: {str(e)}")
+    if saved_otp_info["otp"] != payload.otp_code:
+        raise HTTPException(status_code=400, detail="Mã OTP không chính xác!")
+
+    user_id = str(user["_id"]) if "_id" in user else user["id"]
+    await crud_user.update_user(user_id, {"status": "active"})
+    OTP_STORE.pop(payload.email, None)
+
+    return {"message": "Kích hoạt tài khoản thành công! Bây giờ bạn có thể đăng nhập."}
+
 # ==========================================
-# 6. API CẬP NHẬT HỒ SƠ (UPDATE PROFILE)
+# 3. API GỬI LẠI MÃ OTP
 # ==========================================
-@router.put("/me", response_model=UserProfileResponse)
-async def update_profile(
-    user_in: UserUpdateProfile, 
-    current_user: dict = Depends(get_current_user)
-):
+@router.post("/resend-verification-otp", summary="Gửi lại mã OTP kích hoạt tài khoản")
+async def resend_verification_otp(payload: ResendOTPRequest):
+    user = await crud_user.get_user_by_email(payload.email)
+    if not user:
+        raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản!")
+    
+    if user.get("status") == "active":
+        raise HTTPException(status_code=400, detail="Tài khoản này đã được kích hoạt, vui lòng đăng nhập!")
+
+    otp_code = generate_otp()
+    OTP_STORE[payload.email] = {"otp": otp_code, "exp": time.time() + 300}
+    send_otp_email(payload.email, otp_code, usage="register")
+
+    return {"message": "Mã OTP mới đã được gửi đến email của bạn. Mã có hiệu lực trong 5 phút."}
+
+# ==========================================
+# 4. API ĐĂNG NHẬP (LOGIN)
+# ==========================================
+@router.post("/login", summary="Đăng nhập nhận Token")
+async def login(user_credentials: UserLogin):
+    user = await crud_user.get_user_by_email(user_credentials.email)
+    if not user or not verify_password(user_credentials.password, user["password"]):
+        raise HTTPException(status_code=401, detail="Email hoặc mật khẩu không chính xác!")
+
+    if user.get("status") == "inactive":
+        raise HTTPException(status_code=403, detail="Tài khoản chưa được kích hoạt! Vui lòng kiểm tra email để xác thực.")
+
+    user_id = str(user["_id"]) if "_id" in user else user.get("id")
+    token_data = {"sub": user_id, "role": user.get("role", "customer")}
+
+    return {
+        "message": "Đăng nhập thành công!",
+        "access_token": create_access_token(data=token_data),
+        "refresh_token": create_refresh_token(data=token_data),
+        "token_type": "bearer",
+        "user_info": {
+            "id": user_id,
+            "full_name": user.get("full_name"),
+            "email": user.get("email"),
+            "role": user.get("role"),
+            "status": user.get("status")
+        }
+    }
+
+# ==========================================
+# 5. API QUÊN MẬT KHẨU
+# ==========================================
+@router.post("/forgot-password", summary="Yêu cầu gửi OTP để lấy lại mật khẩu")
+async def forgot_password(payload: ForgotPasswordRequest):
+    user = await crud_user.get_user_by_email(payload.email)
+    if not user:
+        raise HTTPException(status_code=404, detail="Email không tồn tại trong hệ thống!")
+        
+    otp_code = generate_otp()
+    OTP_STORE[payload.email] = {"otp": otp_code, "exp": time.time() + 300}
+    send_otp_email(payload.email, otp_code, usage="reset")
+    
+    return {"message": "Mã OTP khôi phục mật khẩu đã được gửi đến email của bạn."}
+
+# ==========================================
+# 6. API ĐẶT LẠI MẬT KHẨU
+# ==========================================
+@router.post("/reset-password", summary="Xác nhận OTP và Đặt lại mật khẩu")
+async def reset_password(payload: ResetPasswordRequest):
+    saved_otp_info = OTP_STORE.get(payload.email)
+    if not saved_otp_info:
+        raise HTTPException(status_code=400, detail="Mã OTP không tồn tại hoặc bạn chưa yêu cầu gửi!")
+        
+    if time.time() > saved_otp_info["exp"]:
+        OTP_STORE.pop(payload.email, None)
+        raise HTTPException(status_code=400, detail="Mã OTP đã hết hạn!")
+        
+    if saved_otp_info["otp"] != payload.otp:
+        raise HTTPException(status_code=400, detail="Mã OTP không chính xác!")
+        
+    user = await crud_user.get_user_by_email(payload.email)
+    if not user:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
+
+    hashed_new_password = get_password_hash(payload.new_password)
+    user_id = str(user["_id"]) if "_id" in user else user["id"]
+    await crud_user.update_user(user_id, {"password": hashed_new_password})
+    OTP_STORE.pop(payload.email, None)
+    
+    return {"message": "Đặt lại mật khẩu thành công. Bây giờ bạn có thể đăng nhập bằng mật khẩu mới!"}
+
+# ==========================================
+# 7. LẤY / CẬP NHẬT HỒ SƠ
+# ==========================================
+@router.get("/me", response_model=UserProfileResponse, summary="Lấy thông tin cá nhân")
+async def get_profile(current_user: dict = Depends(get_current_user)):
+    if "_id" in current_user:
+        current_user["id"] = str(current_user.pop("_id"))
+    return current_user
+
+@router.put("/me", response_model=UserProfileResponse, summary="Cập nhật hồ sơ")
+async def update_profile(user_in: UserUpdateProfile, current_user: dict = Depends(get_current_user)):
     update_data = user_in.model_dump(exclude_unset=True)
     if not update_data:
         raise HTTPException(status_code=400, detail="Không có dữ liệu để cập nhật!")
 
-    user_id = str(current_user["_id"])
+    user_id = str(current_user.get("_id") or current_user.get("id"))
     updated_user = await crud_user.update_user(user_id, update_data)
     
     if not updated_user:
         raise HTTPException(status_code=404, detail="Không tìm thấy người dùng!")
         
-    updated_user["id"] = str(updated_user["_id"])
     return updated_user
