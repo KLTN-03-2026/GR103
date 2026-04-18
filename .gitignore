@@ -1,0 +1,14 @@
+# Môi trường ảo
+venv/
+env/
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# Biến môi trường (Chứa mật khẩu, tuyệt đối không đẩy lên Git)
+.env
+
+# VS Code
+.vscode/
+node_modules/
